@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import "./App.css";
-import useDebounce from "./hooks/useDebounce";
+import * as Y from "yjs";
 
 function App() {
   const [username, setUsername] = useState<string>("");
@@ -9,8 +9,8 @@ function App() {
   const [users, setUsers] = useState<string[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
 
-  const wsRef = useRef<unknown>(null);
-  const ignoreRef = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const ydocRef = useRef<Y.Doc | null>(null);
 
   const log = (msg: string) => {
     setLogs((l) => [...l, msg]);
@@ -22,6 +22,15 @@ function App() {
     const ws = new WebSocket("ws://localhost:8000");
     wsRef.current = ws;
 
+    const ydoc = new Y.Doc();
+    ydocRef.current = ydoc;
+
+    const ytext = ydoc.getText("content");
+
+    ytext.observe(() => {
+      setContent(ytext.toString());
+    });
+
     ws.onopen = () => {
       log("-> connected");
       ws.send(JSON.stringify({ type: "join", name: username }));
@@ -29,23 +38,26 @@ function App() {
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      log("<- " + JSON.stringify(msg));
 
       if (msg.type === "error") {
         alert(msg.message);
+        ws.close();
         return;
       }
 
+      log("<- " + JSON.stringify(msg));
+
       if (msg.type === "sync") {
-        setJoined(true);
-        setContent(msg.content);
+        const update = base64ToUint8Array(msg.content);
+        Y.applyUpdate(ydoc, update);
         setUsers(msg.users);
+        setJoined(true);
       }
 
       if (msg.type === "edit" && msg.name != username) {
-        ignoreRef.current = true;
-        setContent(msg.content);
-        ignoreRef.current = false;
+        if (!ydocRef.current) return;
+        const update = base64ToUint8Array(msg.content);
+        Y.applyUpdate(ydoc, update);
       }
 
       if (msg.type === "join" && msg.name !== username) {
@@ -60,24 +72,25 @@ function App() {
     ws.onclose = () => log("-> disconnected");
   };
 
-  const debouncedContent = useDebounce(content);
+  const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setContent(val);
 
-  useEffect(() => {
-    if (ignoreRef.current) {
-      return;
-    }
+    const ydoc = ydocRef.current;
+    if (!ydoc) return;
 
-    const timeout = setTimeout(() => {
-      wsRef.current?.send(
-        JSON.stringify({
-          type: "edit",
-          content: debouncedContent,
-        })
-      );
-    }, 0);
+    const ytext = ydoc.getText("content");
+    ytext.delete(0, ytext.length);
+    ytext.insert(0, val);
 
-    return () => clearTimeout(timeout);
-  }, [debouncedContent]);
+    const update = Y.encodeStateAsUpdate(ydoc);
+    const msg = {
+      type: "edit",
+      content: uint8ArrayToBase64(update),
+    };
+
+    wsRef.current?.send(JSON.stringify(msg));
+  };
 
   const bottomRef = useRef<HTMLPreElement | null>(null);
   useEffect(() => {
@@ -111,7 +124,7 @@ function App() {
           <>
             <textarea
               value={content}
-              onChange={(e) => setContent(e.target.value)}
+              onChange={onChange}
               rows={10}
               className="w-full bg-white rounded-sm px-2 py-1"
             ></textarea>
@@ -132,3 +145,22 @@ function App() {
 }
 
 export default App;
+
+function uint8ArrayToBase64(u8: Uint8Array) {
+  let binary = "";
+  const len = u8.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(u8[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64: string) {
+  const binary = atob(base64);
+  const len = binary.length;
+  const u8 = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    u8[i] = binary.charCodeAt(i);
+  }
+  return u8;
+}

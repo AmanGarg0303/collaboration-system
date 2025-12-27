@@ -1,7 +1,7 @@
 import redis from "./redisConnection.js";
 
-const DOC_STATE_KEY = "doc:1:state";
-const USERS_KEY = "doc:1:users";
+export const DOC_STATE_KEY = "doc:1:state";
+export const USERS_KEY = "doc:1:users";
 
 export async function getDocument() {
   return (await redis.get(DOC_STATE_KEY)) || "";

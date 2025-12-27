@@ -1,15 +1,19 @@
-import { WebSocketServer } from "ws";
-import {
-  getDocument,
-  setDocument,
-  addUser,
-  removeUser,
-  userExists,
-  getMembers,
-} from "./redisCalls.js";
+import { WebSocketServer, WebSocket } from "ws";
+import { getDocument, setDocument } from "./redisCalls.js";
+import * as Y from "yjs";
 
 export function setupWebSocket(server) {
   const wss = new WebSocketServer({ server });
+  const doc = new Y.Doc();
+
+  (async () => {
+    const savedState = await getDocument();
+    if (savedState) {
+      Y.applyUpdate(doc, Buffer.from(savedState, "base64"));
+    }
+  })();
+
+  const users = new Set();
 
   wss.on("connection", (ws) => {
     let username = null;
@@ -21,14 +25,11 @@ export function setupWebSocket(server) {
       } catch (error) {
         return;
       }
-      console.log("RAW:::", msg);
 
       // JOIN
       if (msg.type === "join") {
         if (!msg.name) return;
-
-        const exists = await userExists(msg.name);
-        if (exists) {
+        if (users.has(msg.name)) {
           ws.send(
             JSON.stringify({
               type: "error",
@@ -39,13 +40,13 @@ export function setupWebSocket(server) {
         }
 
         username = msg.name;
-        await addUser(username);
+        users.add(username);
 
         ws.send(
           JSON.stringify({
             type: "sync",
-            content: await getDocument(),
-            users: await getMembers(),
+            content: Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64"),
+            users: Array.from(users),
           })
         );
 
@@ -58,15 +59,19 @@ export function setupWebSocket(server) {
       }
 
       // EDIT
-      if (msg.type == "edit") {
+      if (msg.type === "edit") {
         if (!username) return;
-        await setDocument(msg.content);
+        const update = Uint8Array.from(Buffer.from(msg.content, "base64"));
+        Y.applyUpdate(doc, update);
 
         broadcast(wss, {
           type: "edit",
           name: username,
           content: msg.content,
         });
+        await setDocument(
+          Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64")
+        );
 
         return;
       }
@@ -74,7 +79,7 @@ export function setupWebSocket(server) {
 
     ws.on("close", async () => {
       if (!username) return;
-      await removeUser(username);
+      users.delete(username);
 
       broadcast(wss, {
         type: "leave",
