@@ -8,7 +8,7 @@ Collaboration System like simple google docs (single document), user entrance by
 
 ### Steps to start the things:
 
--> npm i // if node_modules are not present in client and server
--> docker-compose up - d
--> /server -> nodemon server.js
--> /client -> npm run dev
+-> npm i // if node_modules are not present in client and server \
+-> docker-compose up - d \
+-> /server -> nodemon server.js \
+-> /client -> npm run dev 
